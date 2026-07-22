@@ -3,16 +3,23 @@ from pydantic import BaseModel
 
 app = FastAPI()
 
+# Item Data Model (Existing)
 class Item(BaseModel):
     name: str
     description: str | None = None
 
-# Temporary data storage (Database Simulation)
+# Database Simulation (Item)
 db = {}
+
+# --- STAGE 2: IN-MEMORY TASK DATABASE ---
+tasks_db = [
+    {"id": 1, "title": "Setup repository", "done": True},
+    {"id": 2, "title": "Build Stage 1 endpoints", "done": True},
+    {"id": 3, "title": "Implement Stage 2 endpoints", "done": False}
+]
 
 # --- STAGE 1 ENDPOINTS ---
 
-# 1. Root Endpoint
 @app.get("/")
 def get_root():
     return {
@@ -21,12 +28,30 @@ def get_root():
         "endpoints": ["/tasks"]
     }
 
-# 2. Health Check Endpoint
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
-# --- EXISTING CRUD ENDPOINTS ---
+# --- STAGE 2 ENDPOINTS ---
+
+# 1. GET /tasks (Return full task list)
+@app.get("/tasks")
+def get_all_tasks():
+    return tasks_db
+
+# 2. GET /tasks/{task_id} (Return single task or 404)
+@app.get("/tasks/{task_id}")
+def get_single_task(task_id: int):
+    for task in tasks_db:
+        if task["id"] == task_id:
+            return task
+    
+    raise HTTPException(
+        status_code=404, 
+        detail=f"Task {task_id} not found"
+    )
+
+# --- EXISTING ITEM ENDPOINTS ---
 
 @app.post("/items/{item_id}")
 def create_item(item_id: int, item: Item):
