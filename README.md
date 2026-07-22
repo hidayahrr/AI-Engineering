@@ -1,2 +1,2 @@
-# Data-Engineering
-This is my data engineering practice repo
+# AI-Engineering
+This is my AI engineering practice repo
