@@ -78,7 +78,7 @@ content-type: application/json
 }
 ```
 
-Tasks are stored in memory only. Restarting the container resets all tasks to the three seed tasks. This is intentional for Week 2 — persistence via a database is added in Week 3.
+Tasks are stored in memory only. Restarting the container resets all tasks to the three seed tasks. This is intentional for this assignment.
 
 ## Swagger UI
 
