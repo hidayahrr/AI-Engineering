@@ -47,9 +47,6 @@ docker compose down
 PowerShell corrupts JSON quoting when passed inline to `curl.exe`. The reliable pattern is to write the JSON body to a file first, then pass it with `-d "@file.json"`.
 
 ```powershell
-# Create the body file
-[System.IO.File]::WriteAllText("$PWD\create.json", '{"title":"Buy milk"}')
-
 # Send the request
 curl.exe -i -X POST http://localhost:8000/tasks `
   -H "Content-Type: application/json" `
@@ -82,4 +79,4 @@ Tasks are stored in memory only. Restarting the container resets all tasks to th
 
 ## Swagger UI
 
-![Swagger UI](Task Management API - Swagger UI.pdf)
+![Swagger UI](swagger-screenshot.png)
