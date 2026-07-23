@@ -1,7 +1,11 @@
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
-app = FastAPI()
+app = FastAPI(
+    title="Task Management API",
+    description="Interactive REST API built with FastAPI for managing tasks.",
+    version="1.0.0"
+)
 
 # Task Request Schemas
 class TaskCreate(BaseModel):
@@ -19,27 +23,27 @@ class Item(BaseModel):
 
 db = {}
 
-@app.post("/items/{item_id}")
+@app.post("/items/{item_id}", tags=["Stage 0"])
 def create_item(item_id: int, item: Item):
     if item_id in db:
         raise HTTPException(status_code=400, detail="Item already exists")
     db[item_id] = item.dict()
     return {"message": "Item created successfully", "data": db[item_id]}
 
-@app.get("/items/{item_id}")
+@app.get("/items/{item_id}", tags=["Stage 0"])
 def read_item(item_id: int):
     if item_id not in db:
         raise HTTPException(status_code=404, detail="Item not found")
     return db[item_id]
 
-@app.put("/items/{item_id}")
+@app.put("/items/{item_id}", tags=["Stage 0"])
 def update_item(item_id: int, item: Item):
     if item_id not in db:
         raise HTTPException(status_code=404, detail="Item not found")
     db[item_id] = item.dict()
     return {"message": "Item updated successfully", "data": db[item_id]}
 
-@app.delete("/items/{item_id}")
+@app.delete("/items/{item_id}", tags=["Stage 0"])
 def delete_item(item_id: int):
     if item_id not in db:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -48,16 +52,18 @@ def delete_item(item_id: int):
 
 # --- STAGE 1 ENDPOINTS ---
 
-@app.get("/")
+@app.get("/", tags=["Stage 1"], summary="Root Health & Meta")
 def get_root():
+    """Returns basic API metadata and available base endpoints."""
     return {
         "name": "Task API",
         "version": "1.0",
         "endpoints": ["/tasks"]
     }
 
-@app.get("/health")
+@app.get("/health", tags=["Stage 1"], summary="Health Check")
 def health_check():
+    """Checks whether the application server is active."""
     return {"status": "ok"}
 
 # --- STAGE 2: IN-MEMORY DATABASE & READ ENDPOINTS ---
@@ -68,12 +74,14 @@ tasks_db = [
     {"id": 3, "title": "Implement Stage 2 endpoints", "done": False}
 ]
 
-@app.get("/tasks")
+@app.get("/tasks", tags=["Tasks"], summary="Get all tasks")
 def get_all_tasks():
+    """Retrieve the full list of tasks from the in-memory database."""
     return tasks_db
 
-@app.get("/tasks/{task_id}")
+@app.get("/tasks/{task_id}", tags=["Tasks"], summary="Get a task by ID")
 def get_single_task(task_id: int):
+    """Retrieve a single task by its unique ID. Returns 404 if not found."""
     for task in tasks_db:
         if task["id"] == task_id:
             return task
@@ -84,8 +92,9 @@ def get_single_task(task_id: int):
 
 # --- STAGE 3 ENDPOINTS ---
 
-@app.post("/tasks", status_code=201)
+@app.post("/tasks", status_code=201, tags=["Tasks"], summary="Create a new task")
 def create_task(task: TaskCreate):
+    """Create a new task with an auto-incremented ID. Returns 201 Created on success."""
     if not task.title or not task.title.strip():
         raise HTTPException(
             status_code=400,
@@ -104,9 +113,9 @@ def create_task(task: TaskCreate):
 
 # --- STAGE 4 ENDPOINTS ---
 
-# 1. PUT /tasks/{task_id} (Update task title and/or done status)
-@app.put("/tasks/{task_id}")
+@app.put("/tasks/{task_id}", tags=["Tasks"], summary="Update a task")
 def update_task(task_id: int, task_data: TaskUpdate):
+    """Update title or completion status of an existing task."""
     target_task = None
     for task in tasks_db:
         if task["id"] == task_id:
@@ -119,7 +128,6 @@ def update_task(task_id: int, task_data: TaskUpdate):
             detail=f"Task {task_id} not found"
         )
     
-    # Validation: empty body or empty title provided
     if task_data.title is None and task_data.done is None:
         raise HTTPException(
             status_code=400,
@@ -139,9 +147,9 @@ def update_task(task_id: int, task_data: TaskUpdate):
         
     return target_task
 
-# 2. DELETE /tasks/{task_id} (Delete task with 204 No Content)
-@app.delete("/tasks/{task_id}", status_code=204)
+@app.delete("/tasks/{task_id}", status_code=204, tags=["Tasks"], summary="Delete a task")
 def delete_task(task_id: int):
+    """Remove a task by ID. Returns HTTP 204 No Content upon successful deletion."""
     global tasks_db
     for i, task in enumerate(tasks_db):
         if task["id"] == task_id:
