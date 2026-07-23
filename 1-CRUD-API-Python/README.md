@@ -1,294 +1,85 @@
-```
-# Task Management REST API
-```
+# Task API
 
-```
-A clean, lightweight, and containerized CRUD REST API built with **FastAPI**,
-**Pydantic**, **Uvicorn**, and **Docker**.
-```
+A CRUD REST API for managing to-do tasks, built with FastAPI (Python).
 
-# `---` 
+## Run locally
 
-# `## Overview` 
+### Clone the repository
 
-```
-This project provides a task management backend supporting full CRUD (Create,
-Read, Update, Delete) operations with built-in request validation, structured
-error handling, OpenAPI (Swagger) documentation, and Docker Compose
-orchestration.
-```
-
-```
----
-```
-
-# `## Project Structure` 
-
-```
-```text
-AI Engineering/
-└── 1-CRUD-API-Python/
-    ├── main.py
-    ├── Dockerfile
-    ├── docker-compose.yml
-    ├── requirements.txt
-    ├── README.md
-    └── image_328f53.png
-```
-
-```
-```
-```
-
-```
----
-```
-
-# `## Prerequisites` 
-
-```
-Ensure you have the following installed on your machine:
-```
-
-```
-* [Docker Desktop](https://www.docker.com/products/docker-desktop/) (includes
-Docker Engine & Docker Compose)
-```
-
-```
-* [Git](https://git-scm.com/)
-```
-
-```
----
-```
-
-```
-## How to Run the Application
-```
-
-```
-Navigate to the project subfolder and run the Docker container with a single
-command:
-```
-
-```
 ```bash
-cd "1-CRUD-API-Python"
+git clone https://github.com/hidayahrr/AI-Engineering.git
+cd "AI-Engineering\1-CRUD-API-Python"
+```
+
+### Start the application
+
+```bash
 docker compose up --build
 ```
 
-```
-```
-```
+The API will be available at:
 
-`The server will initialize and listen for incoming HTTP requests at:` 👉 `**`http://localhost:8000`**` 
+- API: `http://localhost:8000`
+- Swagger UI: `http://localhost:8000/docs`
 
-```
-To stop the running application container:
-```
+To stop the application:
 
-```
 ```bash
 docker compose down
 ```
 
-```
-```
-```
+## Endpoints
 
-```
----
-```
+| Method | Path | Description | Status codes |
+|--------|------|-------------|--------------|
+| GET | `/` | API info | 200 |
+| GET | `/health` | Health check | 200 |
+| GET | `/tasks` | List all tasks | 200 |
+| GET | `/tasks/{id}` | Get one task | 200, 404 |
+| POST | `/tasks` | Create a task | 201, 422 |
+| PUT | `/tasks/{id}` | Update a task | 200, 400, 404 |
+| DELETE | `/tasks/{id}` | Delete a task | 204, 404 |
+| GET | `/stats` | Task statistics | 200 |
+| POST | `/reset` | Reset to seed data | 200 |
 
-```
-## API Endpoints Reference
-```
+## Testing with curl.exe on Windows
 
-```
-| Method | Endpoint | Description | Status Code |
-```
+PowerShell corrupts JSON quoting when passed inline to `curl.exe`. The reliable pattern is to write the JSON body to a file first, then pass it with `-d "@file.json"`.
 
-```
-| --- | --- | --- | --- |
-```
-
-```
-| `GET` | `/` | API metadata and available endpoints | `200 OK` |
-```
-
-```
-| `GET` | `/health` | Server health check endpoint | `200 OK` |
-```
-
-```
-| `GET` | `/tasks` | Retrieve all tasks in the list | `200 OK` |
-```
-
-```
-| `GET` | `/tasks/{id}` | Retrieve a specific task by ID | `200 OK` / `404 Not
-Found` |
-```
-
-```
-| `POST` | `/tasks` | Create a new task with validation | `201 Created` / `400
-Bad Request` |
-```
-
-```
-| `PUT` | `/tasks/{id}` | Update title and/or status of a task | `200 OK` / `400
-Bad Request` / `404 Not Found` |
-| `DELETE` | `/tasks/{id}` | Remove a task by ID | `204 No Content` / `404 Not
-Found` |
-```
-
-```
----
-```
-
-```
-## How to Test the API
-```
-
-```
-You can test the endpoints using PowerShell, Command Prompt, or `curl`.
-```
-
-```
-### 1. Create a New Task (POST)
-```
-
-```
 ```powershell
+# Create the body file
+[System.IO.File]::WriteAllText("$PWD\create.json", '{"title":"Buy milk"}')
+
+# Send the request
+curl.exe -i -X POST http://localhost:8000/tasks `
+  -H "Content-Type: application/json" `
+  -d "@create.json"
 ```
 
-```
-Invoke-RestMethod -Uri "http://localhost:8000/tasks" -Method Post -ContentType
-"application/json" -Body '{"title":"Buy milk"}'
-```
+Example response:
 
 ```
-```
-```
-
-```
-### 2. Retrieve All Tasks (GET)
-```
-
-```
-```powershell
-curl.exe http://localhost:8000/tasks
-```
-
-```
-```
-```
-
-```
-### 3. Update a Task (PUT)
-```
-
-```
-```powershell
-```
-
-```
-Invoke-RestMethod -Uri "http://localhost:8000/tasks/4" -Method Put -ContentType
-"application/json" -Body '{"title":"Buy milk and eggs", "done": true}'
-```
-
-```
-```
-```
-
-```
-### 4. Delete a Task (DELETE)
-```
-
-```
-```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/tasks/4" -Method Delete
-```
-
-```
-```
-```
-
-```
----
-```
-
-```
-## Sample Request & Response Output
-```
-
-```
-Below is an example HTTP response log generated when creating a valid new task:
-```
-
-```
-```http
 HTTP/1.1 201 Created
-date: Fri, 24 Jul 2026 12:00:00 GMT
+date: Sat, 18 Jul 2026 17:50:46 GMT
 server: uvicorn
-content-length: 42
-```
-
-```
+content-length: 43
 content-type: application/json
+
+{"id":4,"title":"Final check","done":false}
 ```
 
-```
-{"id":4,"title":"Buy milk","done":false}
+## Data model
+
+```json
+{
+  "id": 1,
+  "title": "Buy groceries",
+  "done": false
+}
 ```
 
-```
-```
-```
+Tasks are stored in memory only. Restarting the container resets all tasks to the three seed tasks. This is intentional for Week 2 — persistence via a database is added in Week 3.
 
-```
----
-```
+## Swagger UI
 
-```
-## Interactive Documentation (Swagger UI)
-```
-
-```
-FastAPI automatically generates interactive OpenAPI documentation. You can test
-every endpoint directly from your browser without using terminal commands:
-```
-
-👉 `Open **`http://localhost:8000/docs`**` 
-
-```
-```
-```
-
-```
----
-```
-
-```
-<ElicitationsGroup message="What would you like to do next?">
-<Elicitation label="Commit and push README.md to GitHub" query="Commit and push
-README.md to GitHub" query_intent="CLICKABLE_SUGGESTION" />
-```
-
-```
-<Elicitation label="Add automated pytest unit tests for all endpoints"
-query="Add automated pytest unit tests for all endpoints"
-query_intent="CLICKABLE_SUGGESTION" />
-```
-
-```
-<Elicitation label="Add SQLite database persistence using SQLAlchemy" query="Add
-SQLite database persistence using SQLAlchemy"
-query_intent="CLICKABLE_SUGGESTION" />
-</ElicitationsGroup>
-```
-
-```
-```
-```
-
+![Swagger UI](Task Management API - Swagger UI.pdf)
