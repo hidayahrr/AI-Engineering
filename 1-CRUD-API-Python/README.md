@@ -79,4 +79,4 @@ Tasks are stored in memory only. Restarting the container resets all tasks to th
 
 ## Swagger UI
 
-![Swagger UI](swagger-screenshot.png)
+![Swagger UI](swagger_screenshot.png)
