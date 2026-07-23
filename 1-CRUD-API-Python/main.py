@@ -1,11 +1,15 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
 app = FastAPI()
 
-# Task Request Schema for Creation
+# Task Request Schemas
 class TaskCreate(BaseModel):
     title: str | None = None
+
+class TaskUpdate(BaseModel):
+    title: str | None = None
+    done: bool | None = None
 
 # --- STAGE 0 ENDPOINTS ---
 
@@ -56,7 +60,7 @@ def get_root():
 def health_check():
     return {"status": "ok"}
 
-# --- STAGE 2: IN-MEMORY TASK DATABASE & READ ENDPOINTS ---
+# --- STAGE 2: IN-MEMORY DATABASE & READ ENDPOINTS ---
 
 tasks_db = [
     {"id": 1, "title": "Setup repository", "done": True},
@@ -82,16 +86,13 @@ def get_single_task(task_id: int):
 
 @app.post("/tasks", status_code=201)
 def create_task(task: TaskCreate):
-    # Validation: title missing or empty string
     if not task.title or not task.title.strip():
         raise HTTPException(
             status_code=400,
             detail="Title is required and cannot be empty"
         )
     
-    # Auto-increment ID calculation
     new_id = max([t["id"] for t in tasks_db], default=0) + 1
-    
     new_task = {
         "id": new_id,
         "title": task.title.strip(),
@@ -100,3 +101,54 @@ def create_task(task: TaskCreate):
     
     tasks_db.append(new_task)
     return new_task
+
+# --- STAGE 4 ENDPOINTS ---
+
+# 1. PUT /tasks/{task_id} (Update task title and/or done status)
+@app.put("/tasks/{task_id}")
+def update_task(task_id: int, task_data: TaskUpdate):
+    target_task = None
+    for task in tasks_db:
+        if task["id"] == task_id:
+            target_task = task
+            break
+            
+    if not target_task:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Task {task_id} not found"
+        )
+    
+    # Validation: empty body or empty title provided
+    if task_data.title is None and task_data.done is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Request body must include 'title' or 'done'"
+        )
+        
+    if task_data.title is not None:
+        if not task_data.title.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Title cannot be empty"
+            )
+        target_task["title"] = task_data.title.strip()
+        
+    if task_data.done is not None:
+        target_task["done"] = task_data.done
+        
+    return target_task
+
+# 2. DELETE /tasks/{task_id} (Delete task with 204 No Content)
+@app.delete("/tasks/{task_id}", status_code=204)
+def delete_task(task_id: int):
+    global tasks_db
+    for i, task in enumerate(tasks_db):
+        if task["id"] == task_id:
+            tasks_db.pop(i)
+            return Response(status_code=204)
+            
+    raise HTTPException(
+        status_code=404,
+        detail=f"Task {task_id} not found"
+    )
