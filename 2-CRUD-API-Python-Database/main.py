@@ -1,19 +1,27 @@
-from fastapi import FastAPI, HTTPException, Response
+from contextlib import asynccontextmanager
+from typing import List
+from fastapi import FastAPI, HTTPException, Depends, Response
 from pydantic import BaseModel
+from sqlmodel import Session, select
+
+from database import create_db_and_tables, get_db
+from models import Task, TaskCreate, TaskUpdate
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Runs when application starts up
+    create_db_and_tables()
+    yield
+
 
 app = FastAPI(
     title="Task Management API",
     description="Interactive REST API built with FastAPI for managing tasks.",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-# Task Request Schemas
-class TaskCreate(BaseModel):
-    title: str | None = None
-
-class TaskUpdate(BaseModel):
-    title: str | None = None
-    done: bool | None = None
 
 # --- STAGE 0 ENDPOINTS ---
 
@@ -50,6 +58,7 @@ def delete_item(item_id: int):
     del db[item_id]
     return {"message": "Item deleted successfully"}
 
+
 # --- STAGE 1 ENDPOINTS ---
 
 @app.get("/", tags=["Stage 1"], summary="Root Health & Meta")
@@ -66,34 +75,31 @@ def health_check():
     """Checks whether the application server is active."""
     return {"status": "ok"}
 
+
 # --- STAGE 2: IN-MEMORY DATABASE & READ ENDPOINTS ---
 
-tasks_db = [
-    {"id": 1, "title": "Setup repository", "done": True},
-    {"id": 2, "title": "Build Stage 1 endpoints", "done": True},
-    {"id": 3, "title": "Implement Stage 2 endpoints", "done": False}
-]
+@app.get("/tasks", response_model=List[Task], tags=["Tasks"], summary="Get all tasks")
+def get_all_tasks(db: Session = Depends(get_db)):
+    """Retrieve the full list of tasks from the SQLite database."""
+    tasks = db.exec(select(Task)).all()
+    return tasks
 
-@app.get("/tasks", tags=["Tasks"], summary="Get all tasks")
-def get_all_tasks():
-    """Retrieve the full list of tasks from the in-memory database."""
-    return tasks_db
-
-@app.get("/tasks/{task_id}", tags=["Tasks"], summary="Get a task by ID")
-def get_single_task(task_id: int):
+@app.get("/tasks/{task_id}", response_model=Task, tags=["Tasks"], summary="Get a task by ID")
+def get_single_task(task_id: int, db: Session = Depends(get_db)):
     """Retrieve a single task by its unique ID. Returns 404 if not found."""
-    for task in tasks_db:
-        if task["id"] == task_id:
-            return task
-    raise HTTPException(
-        status_code=404, 
-        detail=f"Task {task_id} not found"
-    )
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Task {task_id} not found"
+        )
+    return task
+
 
 # --- STAGE 3 ENDPOINTS ---
 
-@app.post("/tasks", status_code=201, tags=["Tasks"], summary="Create a new task")
-def create_task(task: TaskCreate):
+@app.post("/tasks", response_model=Task, status_code=201, tags=["Tasks"], summary="Create a new task")
+def create_task(task: TaskCreate, db: Session = Depends(get_db)):
     """Create a new task with an auto-incremented ID. Returns 201 Created on success."""
     if not task.title or not task.title.strip():
         raise HTTPException(
@@ -101,28 +107,20 @@ def create_task(task: TaskCreate):
             detail="Title is required and cannot be empty"
         )
     
-    new_id = max([t["id"] for t in tasks_db], default=0) + 1
-    new_task = {
-        "id": new_id,
-        "title": task.title.strip(),
-        "done": False
-    }
-    
-    tasks_db.append(new_task)
+    new_task = Task(title=task.title.strip(), done=False)
+    db.add(new_task)
+    db.commit()
+    db.refresh(new_task)
     return new_task
+
 
 # --- STAGE 4 ENDPOINTS ---
 
-@app.put("/tasks/{task_id}", tags=["Tasks"], summary="Update a task")
-def update_task(task_id: int, task_data: TaskUpdate):
+@app.put("/tasks/{task_id}", response_model=Task, tags=["Tasks"], summary="Update a task")
+def update_task(task_id: int, task_data: TaskUpdate, db: Session = Depends(get_db)):
     """Update title or completion status of an existing task."""
-    target_task = None
-    for task in tasks_db:
-        if task["id"] == task_id:
-            target_task = task
-            break
-            
-    if not target_task:
+    task = db.get(Task, task_id)
+    if not task:
         raise HTTPException(
             status_code=404,
             detail=f"Task {task_id} not found"
@@ -140,23 +138,26 @@ def update_task(task_id: int, task_data: TaskUpdate):
                 status_code=400,
                 detail="Title cannot be empty"
             )
-        target_task["title"] = task_data.title.strip()
+        task.title = task_data.title.strip()
         
     if task_data.done is not None:
-        target_task["done"] = task_data.done
+        task.done = task_data.done
         
-    return target_task
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return task
 
 @app.delete("/tasks/{task_id}", status_code=204, tags=["Tasks"], summary="Delete a task")
-def delete_task(task_id: int):
+def delete_task(task_id: int, db: Session = Depends(get_db)):
     """Remove a task by ID. Returns HTTP 204 No Content upon successful deletion."""
-    global tasks_db
-    for i, task in enumerate(tasks_db):
-        if task["id"] == task_id:
-            tasks_db.pop(i)
-            return Response(status_code=204)
-            
-    raise HTTPException(
-        status_code=404,
-        detail=f"Task {task_id} not found"
-    )
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Task {task_id} not found"
+        )
+        
+    db.delete(task)
+    db.commit()
+    return Response(status_code=204)
