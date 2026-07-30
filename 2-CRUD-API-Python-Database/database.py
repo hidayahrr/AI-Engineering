@@ -1,3 +1,4 @@
+from datetime import datetime
 from sqlmodel import SQLModel, create_engine, Session, select
 from typing import Generator
 
@@ -21,10 +22,11 @@ def create_db_and_tables() -> None:
         existing_tasks = session.exec(select(Task)).all()
 
         if not existing_tasks:
+            now = datetime.utcnow()
             example_tasks = [
-                Task(title="Setup repository", done=True),
-                Task(title="Build Stage 1 endpoints", done=True),
-                Task(title="Implement Stage 2 endpoints", done=False),
+                Task(title="Setup repository", done=True, created_at=now, updated_at=now),
+                Task(title="Build Stage 1 endpoints", done=True, created_at=now, updated_at=now),
+                Task(title="Implement Stage 2 endpoints", done=False, created_at=now, updated_at=now),
             ]
             session.add_all(example_tasks)
             session.commit()

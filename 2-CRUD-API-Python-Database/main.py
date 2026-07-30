@@ -1,8 +1,9 @@
 from contextlib import asynccontextmanager
-from typing import List
+from datetime import datetime
+from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Depends, Response
 from pydantic import BaseModel
-from sqlmodel import Session, select
+from sqlmodel import Session, select, func
 
 from database import create_db_and_tables, get_db
 from models import Task, TaskCreate, TaskUpdate
@@ -67,7 +68,7 @@ def get_root():
     return {
         "name": "Task API",
         "version": "1.0",
-        "endpoints": ["/tasks"]
+        "endpoints": ["/tasks", "/stats"]
     }
 
 @app.get("/health", tags=["Stage 1"], summary="Health Check")
@@ -76,12 +77,49 @@ def health_check():
     return {"status": "ok"}
 
 
-# --- STAGE 2: IN-MEMORY DATABASE & READ ENDPOINTS ---
+# --- OPTIONAL EXTRAS: STATS ENDPOINT ---
 
-@app.get("/tasks", response_model=List[Task], tags=["Tasks"], summary="Get all tasks")
-def get_all_tasks(db: Session = Depends(get_db)):
-    """Retrieve the full list of tasks from the SQLite database."""
-    tasks = db.exec(select(Task)).all()
+@app.get("/stats", tags=["Tasks"], summary="Get task statistics using SQL COUNT()")
+def get_stats(db: Session = Depends(get_db)):
+    """Return task count statistics directly using SQL's COUNT()."""
+    total_tasks = db.exec(select(func.count(Task.id))).one()
+    completed_tasks = db.exec(select(func.count(Task.id)).where(Task.done == True)).one()
+    pending_tasks = db.exec(select(func.count(Task.id)).where(Task.done == False)).one()
+
+    return {
+        "total": total_tasks,
+        "completed": completed_tasks,
+        "pending": pending_tasks
+    }
+
+
+# --- READ ENDPOINTS WITH SEARCH, FILTER, AND SORT ---
+
+@app.get("/tasks", response_model=List[Task], tags=["Tasks"], summary="Get tasks with search, filter, and sort")
+def get_all_tasks(
+    search: Optional[str] = None,
+    done: Optional[bool] = None,
+    sort: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieve tasks from SQLite with optional query parameters:
+    - search: filter by title using SQL LIKE operator
+    - done: filter completed/pending tasks using SQL WHERE clause
+    - sort: pass 'title' to sort alphabetically using SQL ORDER BY
+    """
+    query = select(Task)
+
+    if search:
+        query = query.where(Task.title.like(f"%{search}%"))
+
+    if done is not None:
+        query = query.where(Task.done == done)
+
+    if sort == "title":
+        query = query.order_by(Task.title.asc())
+
+    tasks = db.exec(query).all()
     return tasks
 
 @app.get("/tasks/{task_id}", response_model=Task, tags=["Tasks"], summary="Get a task by ID")
@@ -96,29 +134,27 @@ def get_single_task(task_id: int, db: Session = Depends(get_db)):
     return task
 
 
-# --- STAGE 3 ENDPOINTS ---
+# --- WRITE ENDPOINTS WITH TIMESTAMPS ---
 
 @app.post("/tasks", response_model=Task, status_code=201, tags=["Tasks"], summary="Create a new task")
 def create_task(task: TaskCreate, db: Session = Depends(get_db)):
-    """Create a new task with an auto-incremented ID. Returns 201 Created on success."""
+    """Create a new task with created_at and updated_at timestamps."""
     if not task.title or not task.title.strip():
         raise HTTPException(
             status_code=400,
             detail="Title is required and cannot be empty"
         )
     
-    new_task = Task(title=task.title.strip(), done=False)
+    now = datetime.utcnow()
+    new_task = Task(title=task.title.strip(), done=False, created_at=now, updated_at=now)
     db.add(new_task)
     db.commit()
     db.refresh(new_task)
     return new_task
 
-
-# --- STAGE 4 ENDPOINTS ---
-
 @app.put("/tasks/{task_id}", response_model=Task, tags=["Tasks"], summary="Update a task")
 def update_task(task_id: int, task_data: TaskUpdate, db: Session = Depends(get_db)):
-    """Update title or completion status of an existing task."""
+    """Update title or completion status and refresh the updated_at timestamp."""
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(
@@ -142,6 +178,8 @@ def update_task(task_id: int, task_data: TaskUpdate, db: Session = Depends(get_d
         
     if task_data.done is not None:
         task.done = task_data.done
+
+    task.updated_at = datetime.utcnow()
         
     db.add(task)
     db.commit()
