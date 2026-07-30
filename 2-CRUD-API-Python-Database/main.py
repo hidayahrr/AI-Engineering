@@ -77,23 +77,7 @@ def health_check():
     return {"status": "ok"}
 
 
-# --- OPTIONAL EXTRAS: STATS ENDPOINT ---
-
-@app.get("/stats", tags=["Tasks"], summary="Get task statistics using SQL COUNT()")
-def get_stats(db: Session = Depends(get_db)):
-    """Return task count statistics directly using SQL's COUNT()."""
-    total_tasks = db.exec(select(func.count(Task.id))).one()
-    completed_tasks = db.exec(select(func.count(Task.id)).where(Task.done == True)).one()
-    pending_tasks = db.exec(select(func.count(Task.id)).where(Task.done == False)).one()
-
-    return {
-        "total": total_tasks,
-        "completed": completed_tasks,
-        "pending": pending_tasks
-    }
-
-
-# --- READ ENDPOINTS WITH SEARCH, FILTER, AND SORT ---
+# --- STAGE 1 & 2: DATABASE READ ENDPOINTS (WITH SEARCH, FILTER, SORT) ---
 
 @app.get("/tasks", response_model=List[Task], tags=["Tasks"], summary="Get tasks with search, filter, and sort")
 def get_all_tasks(
@@ -102,12 +86,7 @@ def get_all_tasks(
     sort: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """
-    Retrieve tasks from SQLite with optional query parameters:
-    - search: filter by title using SQL LIKE operator
-    - done: filter completed/pending tasks using SQL WHERE clause
-    - sort: pass 'title' to sort alphabetically using SQL ORDER BY
-    """
+    """Retrieve tasks from SQLite with optional query parameters."""
     query = select(Task)
 
     if search:
@@ -134,11 +113,11 @@ def get_single_task(task_id: int, db: Session = Depends(get_db)):
     return task
 
 
-# --- WRITE ENDPOINTS WITH TIMESTAMPS ---
+# --- STAGE 2: CREATE ENDPOINT ---
 
 @app.post("/tasks", response_model=Task, status_code=201, tags=["Tasks"], summary="Create a new task")
 def create_task(task: TaskCreate, db: Session = Depends(get_db)):
-    """Create a new task with created_at and updated_at timestamps."""
+    """Create a new task with timestamps."""
     if not task.title or not task.title.strip():
         raise HTTPException(
             status_code=400,
@@ -152,9 +131,12 @@ def create_task(task: TaskCreate, db: Session = Depends(get_db)):
     db.refresh(new_task)
     return new_task
 
+
+# --- STAGE 3: UPDATE & DELETE ENDPOINTS ---
+
 @app.put("/tasks/{task_id}", response_model=Task, tags=["Tasks"], summary="Update a task")
 def update_task(task_id: int, task_data: TaskUpdate, db: Session = Depends(get_db)):
-    """Update title or completion status and refresh the updated_at timestamp."""
+    """Update title or completion status of an existing task."""
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(
@@ -199,3 +181,19 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
     db.delete(task)
     db.commit()
     return Response(status_code=204)
+
+
+# --- OPTIONAL EXTRAS ENDPOINTS ---
+
+@app.get("/stats", tags=["Tasks"], summary="Get task statistics using SQL COUNT()")
+def get_stats(db: Session = Depends(get_db)):
+    """Return task count statistics directly using SQL's COUNT()."""
+    total_tasks = db.exec(select(func.count(Task.id))).one()
+    completed_tasks = db.exec(select(func.count(Task.id)).where(Task.done == True)).one()
+    pending_tasks = db.exec(select(func.count(Task.id)).where(Task.done == False)).one()
+
+    return {
+        "total": total_tasks,
+        "completed": completed_tasks,
+        "pending": pending_tasks
+    }
