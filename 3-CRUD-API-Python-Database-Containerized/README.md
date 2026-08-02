@@ -16,3 +16,6 @@ Persistence was verified by completing the following sequence:
 ### Stretch Goals
 - **Redis Cache:** Integrated into `docker-compose.yml` and pinged upon startup.
 - **Query Optimization:** Added an index on `task(title)` (`idx_task_title`) verified via `EXPLAIN ANALYZE`.
+
+### Database
+![Database Screenshot](database_screenshot.png)
