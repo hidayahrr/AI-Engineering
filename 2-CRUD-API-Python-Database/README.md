@@ -77,6 +77,6 @@ content-type: application/json
 
 Tasks are stored in memory only. Restarting the container resets all tasks to the three seed tasks. This is intentional for this assignment.
 
-## Swagger UI
+## Database
 
-![Swagger UI](swagger_screenshot.png)
+![Database Screenshot](database_screenshot.png)
