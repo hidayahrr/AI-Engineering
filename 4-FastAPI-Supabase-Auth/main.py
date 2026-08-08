@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Header, status
 from supabase import create_client, Client
 from schemas import UserAuthSchema
 
-# 1. Environment Setup
+# Load environment variables
 BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
 load_dotenv(dotenv_path=ENV_PATH, override=True)
@@ -17,7 +17,6 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("Missing SUPABASE_URL or SUPABASE_KEY in environment variables.")
 
-# 2. Supabase Client Initialization
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI(title="FastAPI Supabase Auth API")
@@ -28,7 +27,7 @@ def read_root():
     return {"message": "Auth API is up and running"}
 
 
-# --- STAGE 1 ROUTES ---
+# --- STAGE 1: AUTHENTICATION ---
 
 @app.post("/auth/signup", status_code=status.HTTP_201_CREATED)
 def signup(payload: UserAuthSchema):
@@ -90,34 +89,53 @@ def login(payload: UserAuthSchema):
         )
 
 
-# --- STAGE 2 ROUTES ---
+# --- STAGE 2 & 3: PUBLIC & PROTECTED ROUTES ---
 
-# Public route - open to everyone
 @app.get("/public/info", status_code=status.HTTP_200_OK)
 def public_info():
     return {"message": "Welcome stranger! This info is public."}
 
 
-# Protected route - requires Authorization header with Bearer token
 @app.get("/protected/profile", status_code=status.HTTP_200_OK)
 def protected_profile(authorization: Optional[str] = Header(None)):
-    # Check if header exists and starts with "Bearer "
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"error": "Access token required"}
         )
-    
-    # Extract token string after "Bearer "
-    token = authorization.split(" ")[1] if len(authorization.split(" ")) > 1 else ""
-    
+
+    parts = authorization.split(" ")
+    token = parts[1] if len(parts) > 1 else ""
+
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"error": "Access token required"}
         )
 
-    return {
-        "message": "Access granted to unverified route",
-        "token_received": token
-    }
+    try:
+        response = supabase.auth.get_user(token)
+
+        if not response or not response.user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": "Invalid or expired token"}
+            )
+
+        user = response.user
+
+        return {
+            "message": "Access granted to protected profile",
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "created_at": str(user.created_at)
+            }
+        }
+    except HTTPException as http_ex:
+        raise http_ex
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "Invalid or expired token"}
+        )
