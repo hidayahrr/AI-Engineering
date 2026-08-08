@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Header, status
 from supabase import create_client, Client
 from schemas import UserAuthSchema
 
@@ -27,7 +28,8 @@ def read_root():
     return {"message": "Auth API is up and running"}
 
 
-# 3. POST /auth/signup
+# --- STAGE 1 ROUTES ---
+
 @app.post("/auth/signup", status_code=status.HTTP_201_CREATED)
 def signup(payload: UserAuthSchema):
     try:
@@ -36,7 +38,6 @@ def signup(payload: UserAuthSchema):
             "password": payload.password
         })
         
-        # If Supabase returns no user data, raise an error
         if not response.user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -59,7 +60,6 @@ def signup(payload: UserAuthSchema):
         )
 
 
-# 4. POST /auth/login
 @app.post("/auth/login", status_code=status.HTTP_200_OK)
 def login(payload: UserAuthSchema):
     try:
@@ -88,3 +88,36 @@ def login(payload: UserAuthSchema):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"error": "Invalid login credentials"}
         )
+
+
+# --- STAGE 2 ROUTES ---
+
+# Public route - open to everyone
+@app.get("/public/info", status_code=status.HTTP_200_OK)
+def public_info():
+    return {"message": "Welcome stranger! This info is public."}
+
+
+# Protected route - requires Authorization header with Bearer token
+@app.get("/protected/profile", status_code=status.HTTP_200_OK)
+def protected_profile(authorization: Optional[str] = Header(None)):
+    # Check if header exists and starts with "Bearer "
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "Access token required"}
+        )
+    
+    # Extract token string after "Bearer "
+    token = authorization.split(" ")[1] if len(authorization.split(" ")) > 1 else ""
+    
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "Access token required"}
+        )
+
+    return {
+        "message": "Access granted to unverified route",
+        "token_received": token
+    }
