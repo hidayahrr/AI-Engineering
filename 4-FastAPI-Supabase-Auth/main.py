@@ -1,8 +1,8 @@
 import os
 from pathlib import Path
-from typing import Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Depends, status, Response
+from fastapi import FastAPI, HTTPException, Depends, status, Response
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import create_client, Client
 from schemas import UserAuthSchema
 
@@ -25,29 +25,31 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 # Initialize the Supabase client instance
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Initialize the FastAPI application
-app = FastAPI(title="FastAPI Supabase Auth API")
+# Initialize the FastAPI application with custom OpenAPI documentation metadata
+app = FastAPI(
+    title="FastAPI Supabase Auth API",
+    description="A secure REST API demonstrating authentication using FastAPI and Supabase.",
+    version="1.0.0"
+)
+
+# Initialize HTTPBearer security scheme for OpenAPI / Swagger UI configuration
+security_scheme = HTTPBearer(auto_error=True)
 
 
 # ------------------------------------------------------------------------------
-# 2. Authentication Dependency (Middleware Component)
+# 2. Reusable Authentication Dependency
 # ------------------------------------------------------------------------------
 
-def get_current_user(authorization: Optional[str] = Header(None)):
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security_scheme)
+):
     """
     Dependency function that extracts and validates the JWT Bearer token
     from the request authorization header using the Supabase Auth API.
+    Used to protect endpoints and generate Swagger UI security schemes.
     """
-    # Verify that the authorization header exists and starts with "Bearer "
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": "Access token required"}
-        )
-
-    # Extract token string from the header value
-    parts = authorization.split(" ")
-    token = parts[1] if len(parts) > 1 else ""
+    # Extract the token string from the credentials object
+    token = credentials.credentials
 
     if not token:
         raise HTTPException(
@@ -56,7 +58,7 @@ def get_current_user(authorization: Optional[str] = Header(None)):
         )
 
     try:
-        # Validate the token using Supabase SDK
+        # Validate the token using the Supabase SDK
         response = supabase.auth.get_user(token)
 
         if not response or not response.user:
@@ -65,7 +67,7 @@ def get_current_user(authorization: Optional[str] = Header(None)):
                 detail={"error": "Invalid or expired token"}
             )
 
-        # Return authenticated user instance and raw token for route consumption
+        # Return authenticated user instance and raw token string for route consumption
         return {"user": response.user, "token": token}
     except HTTPException as http_ex:
         raise http_ex
@@ -80,17 +82,17 @@ def get_current_user(authorization: Optional[str] = Header(None)):
 # 3. Root Endpoint
 # ------------------------------------------------------------------------------
 
-@app.get("/")
+@app.get("/", tags=["Health Check"])
 def read_root():
     """Root health check endpoint."""
     return {"message": "Auth API is up and running"}
 
 
 # ------------------------------------------------------------------------------
-# 4. Authentication Routes (Stage 1 & Stage 4)
+# 4. Authentication Routes
 # ------------------------------------------------------------------------------
 
-@app.post("/auth/signup", status_code=status.HTTP_201_CREATED)
+@app.post("/auth/signup", status_code=status.HTTP_201_CREATED, tags=["Authentication"])
 def signup(payload: UserAuthSchema):
     """Registers a new user using Supabase Auth."""
     try:
@@ -121,7 +123,7 @@ def signup(payload: UserAuthSchema):
         )
 
 
-@app.post("/auth/login", status_code=status.HTTP_200_OK)
+@app.post("/auth/login", status_code=status.HTTP_200_OK, tags=["Authentication"])
 def login(payload: UserAuthSchema):
     """Authenticates user credentials and returns session tokens."""
     try:
@@ -152,11 +154,11 @@ def login(payload: UserAuthSchema):
         )
 
 
-@app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+@app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT, tags=["Authentication"])
 def logout(current_user: dict = Depends(get_current_user)):
     """Logs out the authenticated user and revokes the active session."""
     try:
-        supabase.auth.sign_out()  # <-- FIXED: REMOVED (scope="global")
+        supabase.auth.sign_out()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     except Exception as e:
         raise HTTPException(
@@ -166,16 +168,16 @@ def logout(current_user: dict = Depends(get_current_user)):
 
 
 # ------------------------------------------------------------------------------
-# 5. Public and Protected Routes (Stage 2, Stage 3, and Stage 4)
+# 5. Public and Protected Routes
 # ------------------------------------------------------------------------------
 
-@app.get("/public/info", status_code=status.HTTP_200_OK)
+@app.get("/public/info", status_code=status.HTTP_200_OK, tags=["Public"])
 def public_info():
     """Unprotected endpoint accessible by any client."""
     return {"message": "Welcome stranger! This info is public."}
 
 
-@app.get("/protected/profile", status_code=status.HTTP_200_OK)
+@app.get("/protected/profile", status_code=status.HTTP_200_OK, tags=["Protected"])
 def protected_profile(current_user: dict = Depends(get_current_user)):
     """Protected endpoint returning verified user profile information."""
     user = current_user["user"]
@@ -189,7 +191,7 @@ def protected_profile(current_user: dict = Depends(get_current_user)):
     }
 
 
-@app.get("/protected/dashboard", status_code=status.HTTP_200_OK)
+@app.get("/protected/dashboard", status_code=status.HTTP_200_OK, tags=["Protected"])
 def protected_dashboard(current_user: dict = Depends(get_current_user)):
     """Secondary protected checkpoint endpoint utilizing the auth dependency."""
     user = current_user["user"]
