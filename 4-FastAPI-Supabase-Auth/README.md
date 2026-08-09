@@ -27,13 +27,13 @@ A production-ready RESTful authentication service built with **FastAPI**, **Supa
 
 ```text
 4-FastAPI-Supabase-Auth/
-├── assets/
-│   └── swagger-ui.png         # Swagger UI documentation screenshot
 ├── .env                       # Local environment variables (git-ignored)
 ├── .gitignore                 # Git ignore rules
+├── glossary.md                # Authentication glossary
 ├── main.py                    # Application endpoints and auth dependency
 ├── requirements.txt           # Python dependencies
 ├── schemas.py                 # Pydantic models for request payloads
+├── swagger-screenshot.png     # Swagger UI documentation screenshot
 └── README.md                  # Project documentation
 ```
 
