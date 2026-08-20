@@ -1,0 +1,12 @@
+# Python virtual environments
+venv/
+.venv/
+env/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Scraper output files
+*.json
+*.html
