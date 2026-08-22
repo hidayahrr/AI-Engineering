@@ -129,7 +129,7 @@ def fetch_with_retry_and_cache(url: str, delay_seconds: float = 1.0) -> str | No
 
 
 # ------------------------------------------------------------------------------
-# Stage 2: Dynamic Catalogue Discovery
+# Dynamic Catalogue Discovery
 # ------------------------------------------------------------------------------
 
 def discover_catalogue_pages(start_url: str, max_pages: int = 3) -> tuple[list[str], list[str], int]:
