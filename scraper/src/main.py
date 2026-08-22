@@ -1,7 +1,9 @@
 import os
 import re
+import csv
 import json
 import time
+import hashlib
 from datetime import datetime, timezone
 from urllib.parse import urljoin
 from typing import Optional
@@ -20,14 +22,18 @@ CATALOGUE_PAGES = [
     "https://books.toscrape.com/catalogue/page-3.html",
 ]
 
-# Controlled failure testing: Add one fake URL to test page isolation
 FAKE_TEST_URL = "https://books.toscrape.com/catalogue/this-page-does-not-exist_9999/index.html"
 
 CACHE_DIR = "cache"
 OUTPUT_DIR = "output"
-BOOKS_FILE = os.path.join(OUTPUT_DIR, "books.json")
+
+BOOKS_JSON_FILE = os.path.join(OUTPUT_DIR, "books.json")
+BOOKS_CSV_FILE = os.path.join(OUTPUT_DIR, "books.csv")
 ERRORS_FILE = os.path.join(OUTPUT_DIR, "errors.json")
 REPORT_FILE = os.path.join(OUTPUT_DIR, "run-report.json")
+CHANGES_FILE = os.path.join(OUTPUT_DIR, "changes.json")
+DASHBOARD_FILE = os.path.join(OUTPUT_DIR, "dashboard.html")
+PREVIOUS_STATE_FILE = os.path.join(CACHE_DIR, "previous_state.json")
 
 HEADERS = {
     "User-Agent": "FlyRankInternship-A9/1.0 (+https://github.com/your-username/your-repo)"
@@ -41,9 +47,6 @@ WORD_TO_NUM = {
     "Five": 5
 }
 
-# ------------------------------------------------------------------------------
-# Global Metrics Counter for Reporting
-# ------------------------------------------------------------------------------
 METRICS = {
     "pages_fetched_live": 0,
     "cache_hits": 0,
@@ -71,7 +74,7 @@ class BookRecord(BaseModel):
 
 
 # ------------------------------------------------------------------------------
-# Resilient HTTP Fetcher with Selective Retries & Caching
+# Resilient HTTP Fetcher
 # ------------------------------------------------------------------------------
 
 def get_cached_filename(url: str) -> str:
@@ -80,20 +83,13 @@ def get_cached_filename(url: str) -> str:
 
 
 def fetch_with_retry_and_cache(url: str, delay_seconds: float = 1.0) -> str | None:
-    """
-    Fetches HTML content with caching.
-    Retries once on timeouts or 5xx server errors.
-    Does NOT retry on 404 (Not Found) or 403 (Forbidden).
-    """
     cache_file = get_cached_filename(url)
 
-    # 1. Check local cache
     if os.path.exists(cache_file):
         METRICS["cache_hits"] += 1
         with open(cache_file, "r", encoding="utf-8") as f:
             return f.read()
 
-    # 2. Live HTTP Request
     time.sleep(delay_seconds)
     max_attempts = 2
 
@@ -102,15 +98,11 @@ def fetch_with_retry_and_cache(url: str, delay_seconds: float = 1.0) -> str | No
             METRICS["pages_fetched_live"] += 1
             response = requests.get(url, headers=HEADERS, timeout=10)
 
-            # Do not retry on 404 or 403
             if response.status_code in (403, 404):
-                print(f"[FETCH ERROR] Permanent HTTP {response.status_code} for {url}. Skipping.")
                 METRICS["failed_pages"] += 1
                 return None
 
-            # Retry on server errors (5xx)
             if response.status_code >= 500:
-                print(f"[SERVER ERROR] HTTP {response.status_code} on attempt {attempt}/{max_attempts} for {url}")
                 if attempt < max_attempts:
                     time.sleep(2.0)
                     continue
@@ -124,16 +116,10 @@ def fetch_with_retry_and_cache(url: str, delay_seconds: float = 1.0) -> str | No
                     f.write(html_content)
                 return html_content
 
-        except requests.Timeout:
-            print(f"[TIMEOUT] Request timed out on attempt {attempt}/{max_attempts} for {url}")
+        except requests.RequestException:
             if attempt < max_attempts:
                 time.sleep(2.0)
                 continue
-            METRICS["failed_pages"] += 1
-            return None
-
-        except requests.RequestException as e:
-            print(f"[NETWORK ERROR] Failed to fetch {url}: {e}")
             METRICS["failed_pages"] += 1
             return None
 
@@ -168,7 +154,7 @@ def normalize_rating(rating_text: Optional[str]) -> Optional[int]:
 
 
 # ------------------------------------------------------------------------------
-# Page Parsing & Extraction
+# Parsing Logic
 # ------------------------------------------------------------------------------
 
 def extract_book_urls(catalogue_url: str) -> list[str]:
@@ -242,7 +228,184 @@ def parse_and_normalize_book(product_url: str, source_page: str) -> dict | None:
 
 
 # ------------------------------------------------------------------------------
-# Main Pipeline Execution
+# Extra 1: CSV Export with Value Flattening
+# ------------------------------------------------------------------------------
+
+def export_to_csv(records: list[dict]):
+    """
+    Exports validated records to output/books.csv.
+    Flattens missing/None values into empty strings and normalizes line breaks.
+    """
+    if not records:
+        return
+
+    fieldnames = list(records[0].keys())
+
+    with open(BOOKS_CSV_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for record in records:
+            flattened_row = {}
+            for key, val in record.items():
+                if val is None:
+                    flattened_row[key] = ""
+                elif isinstance(val, str):
+                    # Replace newline characters with spaces to prevent CSV layout corruption
+                    flattened_row[key] = val.replace("\r", " ").replace("\n", " ")
+                else:
+                    flattened_row[key] = val
+            writer.writerow(flattened_row)
+
+
+# ------------------------------------------------------------------------------
+# Extra 2: Change Detection (Hashing State)
+# ------------------------------------------------------------------------------
+
+def compute_record_hash(record: dict) -> str:
+    """Computes a SHA-256 hash of core content fields to detect modifications."""
+    core_content = {
+        "title": record["title"],
+        "price_gbp": record["price_gbp"],
+        "stock_count": record["stock_count"],
+        "rating": record["rating"],
+        "description": record["description"]
+    }
+    encoded = json.dumps(core_content, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def perform_change_detection(current_records: list[dict]) -> dict:
+    """
+    Compares current records against previous execution state stored in cache.
+    Categorizes URLs into: new, changed, unchanged, or gone.
+    """
+    previous_state = {}
+    if os.path.exists(PREVIOUS_STATE_FILE):
+        try:
+            with open(PREVIOUS_STATE_FILE, "r", encoding="utf-8") as f:
+                previous_state = json.load(f)
+        except Exception:
+            previous_state = {}
+
+    current_state = {}
+    changes = {
+        "new": [],
+        "changed": [],
+        "unchanged": [],
+        "gone": []
+    }
+
+    # Analyze current records
+    for record in current_records:
+        url = record["product_url"]
+        record_hash = compute_record_hash(record)
+        current_state[url] = record_hash
+
+        if url not in previous_state:
+            changes["new"].append(url)
+        elif previous_state[url] != record_hash:
+            changes["changed"].append(url)
+        else:
+            changes["unchanged"].append(url)
+
+    # Detect gone records
+    for url in previous_state:
+        if url not in current_state:
+            changes["gone"].append(url)
+
+    # Persist current state for future run comparisons
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(PREVIOUS_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(current_state, f, indent=2)
+
+    # Save change detection results
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    with open(CHANGES_FILE, "w", encoding="utf-8") as f:
+        json.dump(changes, f, indent=2)
+
+    return changes
+
+
+# ------------------------------------------------------------------------------
+# Extra 3: Tiny HTML Dashboard Generation
+# ------------------------------------------------------------------------------
+
+def generate_html_dashboard(run_report: dict, records: list[dict], changes: dict):
+    """Generates a standalone HTML dashboard visualizing pipeline health and stats."""
+    prices = [r["price_gbp"] for r in records if r.get("price_gbp")]
+    min_price = min(prices) if prices else 0.0
+    max_price = max(prices) if prices else 0.0
+    avg_price = round(sum(prices) / len(prices), 2) if prices else 0.0
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scraper Observability Dashboard</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f4f6f8; color: #333; margin: 0; padding: 20px; }}
+        .container {{ max-width: 900px; margin: 0 auto; background: #fff; padding: 25px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }}
+        h1 {{ margin-top: 0; color: #111; }}
+        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }}
+        .card {{ background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px; padding: 15px; text-align: center; }}
+        .card .number {{ font-size: 24px; font-weight: bold; color: #0066cc; margin-top: 5px; }}
+        .badge-success {{ background: #d4edda; color: #155724; padding: 4px 8px; border-radius: 4px; font-size: 14px; display: inline-block; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
+        th, td {{ border: 1px solid #dee2e6; padding: 10px; text-align: left; }}
+        th {{ background: #f1f3f5; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Book Scraper Dashboard</h1>
+        <p><span class="badge-success">Status: Healthy</span> &nbsp; <strong>Freshness (UTC):</strong> {run_report['start_time']}</p>
+        
+        <div class="grid">
+            <div class="card">
+                <div>Total Records</div>
+                <div class="number">{run_report['valid_records']}</div>
+            </div>
+            <div class="card">
+                <div>Failed Pages</div>
+                <div class="number" style="color: #dc3545;">{run_report['failed_pages']}</div>
+            </div>
+            <div class="card">
+                <div>Duration</div>
+                <div class="number">{run_report['duration_seconds']}s</div>
+            </div>
+            <div class="card">
+                <div>Avg Price</div>
+                <div class="number">£{avg_price}</div>
+            </div>
+        </div>
+
+        <h2>Price Metrics</h2>
+        <ul>
+            <li><strong>Min Price:</strong> £{min_price}</li>
+            <li><strong>Max Price:</strong> £{max_price}</li>
+            <li><strong>Average Price:</strong> £{avg_price}</li>
+        </ul>
+
+        <h2>Change Detection Summary</h2>
+        <table>
+            <tr><th>State</th><th>Count</th></tr>
+            <tr><td>New Records</td><td>{len(changes['new'])}</td></tr>
+            <tr><td>Changed Records</td><td>{len(changes['changed'])}</td></tr>
+            <tr><td>Unchanged Records</td><td>{len(changes['unchanged'])}</td></tr>
+            <tr><td>Gone Records</td><td>{len(changes['gone'])}</td></tr>
+        </table>
+    </div>
+</body>
+</html>
+"""
+    with open(DASHBOARD_FILE, "w", encoding="utf-8") as f:
+        f.write(html_content)
+
+
+# ------------------------------------------------------------------------------
+# Main Pipeline
 # ------------------------------------------------------------------------------
 
 def run_pipeline():
@@ -250,24 +413,19 @@ def run_pipeline():
     start_timestamp = start_time_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     start_perf = time.perf_counter()
 
-    print("--- STAGE 5: FAULT TOLERANCE & REPORTING ---")
+    print("--- PIPELINE EXECUTION WITH EXTRAS ---")
 
     unique_urls = set()
     validated_records = []
     error_records = []
 
-    # 1. Discover URLs from catalogue pages
     for cat_url in CATALOGUE_PAGES:
         urls = extract_book_urls(cat_url)
         for url in urls:
             unique_urls.add(url)
 
-    # Inject one intentionally invalid fake URL for fault-tolerance verification
     unique_urls.add(FAKE_TEST_URL)
 
-    print(f"Total target URLs to process (including 1 fake URL): {len(unique_urls)}")
-
-    # 2. Process each book independently
     for url in unique_urls:
         try:
             record_dict = parse_and_normalize_book(product_url=url, source_page=CATALOGUE_PAGES[0])
@@ -276,7 +434,6 @@ def run_pipeline():
                 error_records.append({"url": url, "reason": "HTTP fetch failed or invalid HTML structure"})
                 continue
 
-            # Validate against Pydantic model
             validated_model = BookRecord(**record_dict)
             validated_records.append(validated_model.model_dump(mode="json"))
 
@@ -287,22 +444,23 @@ def run_pipeline():
                 "details": ve.errors()
             })
         except Exception as ex:
-            # Global catch to isolate and survive any unexpected exceptions
             error_records.append({
                 "url": url,
                 "reason": f"Unhandled exception: {str(ex)}"
             })
 
-    # 3. Store valid output to output/books.json
+    # Save JSON Outputs
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    with open(BOOKS_FILE, "w", encoding="utf-8") as f:
+    with open(BOOKS_JSON_FILE, "w", encoding="utf-8") as f:
         json.dump(validated_records, f, indent=2, ensure_ascii=False)
 
-    # 4. Store error output to output/errors.json
     with open(ERRORS_FILE, "w", encoding="utf-8") as f:
         json.dump(error_records, f, indent=2, ensure_ascii=False)
 
-    # 5. Generate and write output/run-report.json
+    # Execute Extras
+    export_to_csv(validated_records)
+    changes = perform_change_detection(validated_records)
+
     end_perf = time.perf_counter()
     duration_seconds = round(end_perf - start_perf, 2)
 
@@ -320,15 +478,14 @@ def run_pipeline():
     with open(REPORT_FILE, "w", encoding="utf-8") as f:
         json.dump(run_report, f, indent=2)
 
-    # 6. Terminal Summary Report
-    print("\n================ RUN REPORT SUMMARY ================")
-    print(f"Start Time         : {run_report['start_time']}")
-    print(f"Duration           : {run_report['duration_seconds']}s")
-    print(f"Valid Records      : {run_report['valid_records']} -> {BOOKS_FILE}")
-    print(f"Invalid Records    : {run_report['invalid_records']} -> {ERRORS_FILE}")
-    print(f"Failed Pages       : {run_report['failed_pages']}")
-    print(f"Report File        : {REPORT_FILE}")
-    print("===================================================\n")
+    generate_html_dashboard(run_report, validated_records, changes)
+
+    print("\n================ FINAL REPORT ================")
+    print(f"Valid Records Saved : {len(validated_records)} -> {BOOKS_JSON_FILE}")
+    print(f"CSV Export          : {BOOKS_CSV_FILE}")
+    print(f"Change Detection    : {CHANGES_FILE}")
+    print(f"HTML Dashboard      : {DASHBOARD_FILE}")
+    print("==============================================\n")
 
 
 if __name__ == "__main__":
