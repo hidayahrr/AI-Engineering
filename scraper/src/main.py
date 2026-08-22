@@ -16,6 +16,7 @@ from pydantic import BaseModel, HttpUrl, Field, ValidationError
 # Configuration
 # ------------------------------------------------------------------------------
 BASE_URL = "https://books.toscrape.com/catalogue/"
+START_URL = "https://books.toscrape.com/catalogue/page-1.html"
 CATALOGUE_PAGES = [
     "https://books.toscrape.com/catalogue/page-1.html",
     "https://books.toscrape.com/catalogue/page-2.html",
@@ -125,6 +126,45 @@ def fetch_with_retry_and_cache(url: str, delay_seconds: float = 1.0) -> str | No
 
     METRICS["failed_pages"] += 1
     return None
+
+
+# ------------------------------------------------------------------------------
+# Stage 2: Dynamic Catalogue Discovery
+# ------------------------------------------------------------------------------
+
+def discover_catalogue_pages(start_url: str, max_pages: int = 3) -> tuple[list[str], list[str], int]:
+    """
+    Crawls catalogue pages dynamically by following the 'next' pagination link.
+    Returns (discovered_catalogue_urls, discovered_book_urls, total_raw_count).
+    """
+    current_page_url = start_url
+    catalogue_pages = []
+    all_book_urls = []
+
+    while current_page_url and len(catalogue_pages) < max_pages:
+        catalogue_pages.append(current_page_url)
+        html = fetch_with_retry_and_cache(current_page_url)
+        if not html:
+            break
+
+        soup = BeautifulSoup(html, "html.parser")
+
+        articles = soup.find_all("article", class_="product_pod")
+        for article in articles:
+            a_tag = article.find("h3").find("a")
+            if a_tag and "href" in a_tag.attrs:
+                relative_url = a_tag["href"]
+                absolute_url = urljoin(BASE_URL, relative_url)
+                all_book_urls.append(absolute_url)
+
+        next_li = soup.find("li", class_="next")
+        if next_li and next_li.find("a"):
+            next_href = next_li.find("a")["href"]
+            current_page_url = urljoin(current_page_url, next_href)
+        else:
+            current_page_url = None
+
+    return catalogue_pages, all_book_urls, len(all_book_urls)
 
 
 # ------------------------------------------------------------------------------
@@ -251,7 +291,6 @@ def export_to_csv(records: list[dict]):
                 if val is None:
                     flattened_row[key] = ""
                 elif isinstance(val, str):
-                    # Replace newline characters with spaces to prevent CSV layout corruption
                     flattened_row[key] = val.replace("\r", " ").replace("\n", " ")
                 else:
                     flattened_row[key] = val
@@ -296,7 +335,6 @@ def perform_change_detection(current_records: list[dict]) -> dict:
         "gone": []
     }
 
-    # Analyze current records
     for record in current_records:
         url = record["product_url"]
         record_hash = compute_record_hash(record)
@@ -309,17 +347,14 @@ def perform_change_detection(current_records: list[dict]) -> dict:
         else:
             changes["unchanged"].append(url)
 
-    # Detect gone records
     for url in previous_state:
         if url not in current_state:
             changes["gone"].append(url)
 
-    # Persist current state for future run comparisons
     os.makedirs(CACHE_DIR, exist_ok=True)
     with open(PREVIOUS_STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(current_state, f, indent=2)
 
-    # Save change detection results
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(CHANGES_FILE, "w", encoding="utf-8") as f:
         json.dump(changes, f, indent=2)
@@ -413,22 +448,25 @@ def run_pipeline():
     start_timestamp = start_time_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     start_perf = time.perf_counter()
 
-    print("--- PIPELINE EXECUTION WITH EXTRAS ---")
+    print("--- STAGE 2: DISCOVER THREE CATALOGUE PAGES ---")
 
-    unique_urls = set()
+    # Dynamic catalogue discovery for Stage 2
+    cat_pages, discovered_urls, raw_count = discover_catalogue_pages(START_URL, max_pages=3)
+    unique_urls = set(discovered_urls)
+
+    # Stage 2 Checkpoint Log
+    print(f"catalogue_pages={len(cat_pages)}, discovered={raw_count}, unique_urls={len(unique_urls)}")
+
+    # Add failure test URL for resilience testing
+    processing_urls = set(unique_urls)
+    processing_urls.add(FAKE_TEST_URL)
+
     validated_records = []
     error_records = []
 
-    for cat_url in CATALOGUE_PAGES:
-        urls = extract_book_urls(cat_url)
-        for url in urls:
-            unique_urls.add(url)
-
-    unique_urls.add(FAKE_TEST_URL)
-
-    for url in unique_urls:
+    for url in processing_urls:
         try:
-            record_dict = parse_and_normalize_book(product_url=url, source_page=CATALOGUE_PAGES[0])
+            record_dict = parse_and_normalize_book(product_url=url, source_page=cat_pages[0])
 
             if not record_dict:
                 error_records.append({"url": url, "reason": "HTTP fetch failed or invalid HTML structure"})
@@ -467,7 +505,7 @@ def run_pipeline():
     run_report = {
         "start_time": start_timestamp,
         "duration_seconds": duration_seconds,
-        "total_urls_discovered": len(unique_urls),
+        "total_urls_discovered": len(processing_urls),
         "pages_fetched_live": METRICS["pages_fetched_live"],
         "cache_hits": METRICS["cache_hits"],
         "valid_records": len(validated_records),
