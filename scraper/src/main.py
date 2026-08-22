@@ -20,10 +20,14 @@ CATALOGUE_PAGES = [
     "https://books.toscrape.com/catalogue/page-3.html",
 ]
 
+# Controlled failure testing: Add one fake URL to test page isolation
+FAKE_TEST_URL = "https://books.toscrape.com/catalogue/this-page-does-not-exist_9999/index.html"
+
 CACHE_DIR = "cache"
 OUTPUT_DIR = "output"
 BOOKS_FILE = os.path.join(OUTPUT_DIR, "books.json")
 ERRORS_FILE = os.path.join(OUTPUT_DIR, "errors.json")
+REPORT_FILE = os.path.join(OUTPUT_DIR, "run-report.json")
 
 HEADERS = {
     "User-Agent": "FlyRankInternship-A9/1.0 (+https://github.com/your-username/your-repo)"
@@ -37,13 +41,21 @@ WORD_TO_NUM = {
     "Five": 5
 }
 
+# ------------------------------------------------------------------------------
+# Global Metrics Counter for Reporting
+# ------------------------------------------------------------------------------
+METRICS = {
+    "pages_fetched_live": 0,
+    "cache_hits": 0,
+    "failed_pages": 0
+}
+
 
 # ------------------------------------------------------------------------------
 # Pydantic Schema Definition
 # ------------------------------------------------------------------------------
 
 class BookRecord(BaseModel):
-    """Schema defining the required types and constraints for a clean book record."""
     title: str
     product_url: HttpUrl
     price_text: str
@@ -59,7 +71,7 @@ class BookRecord(BaseModel):
 
 
 # ------------------------------------------------------------------------------
-# Helper & Politeness Functions
+# Resilient HTTP Fetcher with Selective Retries & Caching
 # ------------------------------------------------------------------------------
 
 def get_cached_filename(url: str) -> str:
@@ -67,29 +79,66 @@ def get_cached_filename(url: str) -> str:
     return os.path.join(CACHE_DIR, f"{clean_name}.html")
 
 
-def fetch_with_cache(url: str, delay_seconds: float = 1.0) -> str | None:
+def fetch_with_retry_and_cache(url: str, delay_seconds: float = 1.0) -> str | None:
+    """
+    Fetches HTML content with caching.
+    Retries once on timeouts or 5xx server errors.
+    Does NOT retry on 404 (Not Found) or 403 (Forbidden).
+    """
     cache_file = get_cached_filename(url)
 
+    # 1. Check local cache
     if os.path.exists(cache_file):
+        METRICS["cache_hits"] += 1
         with open(cache_file, "r", encoding="utf-8") as f:
             return f.read()
 
+    # 2. Live HTTP Request
     time.sleep(delay_seconds)
+    max_attempts = 2
 
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        if response.status_code != 200:
+    for attempt in range(1, max_attempts + 1):
+        try:
+            METRICS["pages_fetched_live"] += 1
+            response = requests.get(url, headers=HEADERS, timeout=10)
+
+            # Do not retry on 404 or 403
+            if response.status_code in (403, 404):
+                print(f"[FETCH ERROR] Permanent HTTP {response.status_code} for {url}. Skipping.")
+                METRICS["failed_pages"] += 1
+                return None
+
+            # Retry on server errors (5xx)
+            if response.status_code >= 500:
+                print(f"[SERVER ERROR] HTTP {response.status_code} on attempt {attempt}/{max_attempts} for {url}")
+                if attempt < max_attempts:
+                    time.sleep(2.0)
+                    continue
+                METRICS["failed_pages"] += 1
+                return None
+
+            if response.status_code == 200:
+                html_content = response.text
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    f.write(html_content)
+                return html_content
+
+        except requests.Timeout:
+            print(f"[TIMEOUT] Request timed out on attempt {attempt}/{max_attempts} for {url}")
+            if attempt < max_attempts:
+                time.sleep(2.0)
+                continue
+            METRICS["failed_pages"] += 1
             return None
 
-        html_content = response.text
-        os.makedirs(CACHE_DIR, exist_ok=True)
-        with open(cache_file, "w", encoding="utf-8") as f:
-            f.write(html_content)
+        except requests.RequestException as e:
+            print(f"[NETWORK ERROR] Failed to fetch {url}: {e}")
+            METRICS["failed_pages"] += 1
+            return None
 
-        return html_content
-
-    except requests.RequestException:
-        return None
+    METRICS["failed_pages"] += 1
+    return None
 
 
 # ------------------------------------------------------------------------------
@@ -97,7 +146,6 @@ def fetch_with_cache(url: str, delay_seconds: float = 1.0) -> str | None:
 # ------------------------------------------------------------------------------
 
 def normalize_price(price_text: Optional[str]) -> Optional[float]:
-    """Extracts numeric float from price string (e.g., '£51.77' -> 51.77)."""
     if not price_text:
         return None
     match = re.search(r"[\d.]+", price_text)
@@ -105,10 +153,8 @@ def normalize_price(price_text: Optional[str]) -> Optional[float]:
 
 
 def normalize_availability(availability_text: Optional[str]) -> tuple[bool, int]:
-    """Parses stock availability string (e.g., 'In stock (22 available)' -> (True, 22))."""
     if not availability_text:
         return False, 0
-
     in_stock = "In stock" in availability_text
     match = re.search(r"\d+", availability_text)
     stock_count = int(match.group(0)) if match else (1 if in_stock else 0)
@@ -116,18 +162,17 @@ def normalize_availability(availability_text: Optional[str]) -> tuple[bool, int]
 
 
 def normalize_rating(rating_text: Optional[str]) -> Optional[int]:
-    """Converts word ratings to integers (e.g., 'Three' -> 3)."""
     if not rating_text:
         return None
     return WORD_TO_NUM.get(rating_text)
 
 
 # ------------------------------------------------------------------------------
-# Extraction & Parsing Logic
+# Page Parsing & Extraction
 # ------------------------------------------------------------------------------
 
 def extract_book_urls(catalogue_url: str) -> list[str]:
-    html = fetch_with_cache(catalogue_url)
+    html = fetch_with_retry_and_cache(catalogue_url)
     if not html:
         return []
 
@@ -146,7 +191,7 @@ def extract_book_urls(catalogue_url: str) -> list[str]:
 
 
 def parse_and_normalize_book(product_url: str, source_page: str) -> dict | None:
-    html = fetch_with_cache(product_url)
+    html = fetch_with_retry_and_cache(product_url)
     if not html:
         return None
 
@@ -155,7 +200,6 @@ def parse_and_normalize_book(product_url: str, source_page: str) -> dict | None:
     if not product_main:
         return None
 
-    # Raw extractions
     h1_tag = product_main.find("h1")
     title = h1_tag.get_text(strip=True) if h1_tag else ""
 
@@ -181,21 +225,16 @@ def parse_and_normalize_book(product_url: str, source_page: str) -> dict | None:
 
     fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # Normalization steps
-    price_gbp = normalize_price(price_text)
-    in_stock, stock_count = normalize_availability(availability_text)
-    rating = normalize_rating(rating_text)
-
     return {
         "title": title,
         "product_url": product_url,
         "price_text": price_text,
-        "price_gbp": price_gbp,
+        "price_gbp": normalize_price(price_text),
         "availability_text": availability_text,
-        "in_stock": in_stock,
-        "stock_count": stock_count,
+        "in_stock": normalize_availability(availability_text)[0],
+        "stock_count": normalize_availability(availability_text)[1],
         "rating_text": rating_text,
-        "rating": rating,
+        "rating": normalize_rating(rating_text),
         "description": description,
         "source_page": source_page,
         "fetched_at": fetched_at,
@@ -203,44 +242,55 @@ def parse_and_normalize_book(product_url: str, source_page: str) -> dict | None:
 
 
 # ------------------------------------------------------------------------------
-# Main Pipeline: Run, Validate, Store
+# Main Pipeline Execution
 # ------------------------------------------------------------------------------
 
 def run_pipeline():
-    print("--- STAGE 4: NORMALIZE, VALIDATE & STORE ---")
+    start_time_utc = datetime.now(timezone.utc)
+    start_timestamp = start_time_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    start_perf = time.perf_counter()
+
+    print("--- STAGE 5: FAULT TOLERANCE & REPORTING ---")
 
     unique_urls = set()
     validated_records = []
     error_records = []
 
-    # 1. Scrape catalogue pages
+    # 1. Discover URLs from catalogue pages
     for cat_url in CATALOGUE_PAGES:
-        print(f"Fetching links from: {cat_url}")
         urls = extract_book_urls(cat_url)
         for url in urls:
             unique_urls.add(url)
 
-    print(f"Discovered {len(unique_urls)} unique book URLs across 3 catalogue pages.")
+    # Inject one intentionally invalid fake URL for fault-tolerance verification
+    unique_urls.add(FAKE_TEST_URL)
 
-    # 2. Extract, normalize, and validate each book (using unique_urls for idempotency)
+    print(f"Total target URLs to process (including 1 fake URL): {len(unique_urls)}")
+
+    # 2. Process each book independently
     for url in unique_urls:
-        # Determine source page reference
-        source_page = CATALOGUE_PAGES[0] # Default fallback
-        record_dict = parse_and_normalize_book(product_url=url, source_page=source_page)
-
-        if not record_dict:
-            error_records.append({"url": url, "error": "Failed to parse product page"})
-            continue
-
-        # Validate against Pydantic schema
         try:
+            record_dict = parse_and_normalize_book(product_url=url, source_page=CATALOGUE_PAGES[0])
+
+            if not record_dict:
+                error_records.append({"url": url, "reason": "HTTP fetch failed or invalid HTML structure"})
+                continue
+
+            # Validate against Pydantic model
             validated_model = BookRecord(**record_dict)
-            # Convert validated Pydantic model to Python dictionary (with HttpUrl exported as string)
             validated_records.append(validated_model.model_dump(mode="json"))
+
         except ValidationError as ve:
             error_records.append({
-                "record": record_dict,
-                "error": ve.errors()
+                "url": url,
+                "reason": "Schema validation failed",
+                "details": ve.errors()
+            })
+        except Exception as ex:
+            # Global catch to isolate and survive any unexpected exceptions
+            error_records.append({
+                "url": url,
+                "reason": f"Unhandled exception: {str(ex)}"
             })
 
     # 3. Store valid output to output/books.json
@@ -248,16 +298,37 @@ def run_pipeline():
     with open(BOOKS_FILE, "w", encoding="utf-8") as f:
         json.dump(validated_records, f, indent=2, ensure_ascii=False)
 
-    # 4. Store any failed records to output/errors.json
+    # 4. Store error output to output/errors.json
     with open(ERRORS_FILE, "w", encoding="utf-8") as f:
         json.dump(error_records, f, indent=2, ensure_ascii=False)
 
-    # 5. Print Summary Report
-    print("\n================ FINAL SUMMARY REPORT ================")
-    print(f"Total Unique URLs Discovered : {len(unique_urls)}")
-    print(f"Valid Records Saved          : {len(validated_records)} -> {BOOKS_FILE}")
-    print(f"Failed/Rejected Records      : {len(error_records)} -> {ERRORS_FILE}")
-    print("======================================================\n")
+    # 5. Generate and write output/run-report.json
+    end_perf = time.perf_counter()
+    duration_seconds = round(end_perf - start_perf, 2)
+
+    run_report = {
+        "start_time": start_timestamp,
+        "duration_seconds": duration_seconds,
+        "total_urls_discovered": len(unique_urls),
+        "pages_fetched_live": METRICS["pages_fetched_live"],
+        "cache_hits": METRICS["cache_hits"],
+        "valid_records": len(validated_records),
+        "invalid_records": len(error_records),
+        "failed_pages": METRICS["failed_pages"]
+    }
+
+    with open(REPORT_FILE, "w", encoding="utf-8") as f:
+        json.dump(run_report, f, indent=2)
+
+    # 6. Terminal Summary Report
+    print("\n================ RUN REPORT SUMMARY ================")
+    print(f"Start Time         : {run_report['start_time']}")
+    print(f"Duration           : {run_report['duration_seconds']}s")
+    print(f"Valid Records      : {run_report['valid_records']} -> {BOOKS_FILE}")
+    print(f"Invalid Records    : {run_report['invalid_records']} -> {ERRORS_FILE}")
+    print(f"Failed Pages       : {run_report['failed_pages']}")
+    print(f"Report File        : {REPORT_FILE}")
+    print("===================================================\n")
 
 
 if __name__ == "__main__":
