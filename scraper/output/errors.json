@@ -1,0 +1,6 @@
+[
+  {
+    "url": "https://books.toscrape.com/catalogue/this-page-does-not-exist_9999/index.html",
+    "reason": "HTTP fetch failed or invalid HTML structure"
+  }
+]

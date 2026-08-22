@@ -3,10 +3,9 @@ venv/
 .venv/
 env/
 
-# Python cache files
+# Python cache & build artifacts
 __pycache__/
 *.pyc
 
-# Scraper output files
-*.json
-*.html
+# Local HTML Cache (Do NOT commit hundreds of HTML files)
+cache/
