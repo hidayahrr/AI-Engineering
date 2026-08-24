@@ -51,8 +51,6 @@ python -m uvicorn src.main:app --reload
 
 ### 1. Valid Request (`HTTP 200` + Schema JSON)
 
-[cite: 1]
-
 **Python Execution (Cross-Platform):**
 
 ```powershell
@@ -79,8 +77,6 @@ curl -X POST "[http://127.0.0.1:8000/triage](http://127.0.0.1:8000/triage)" \
 ```
 
 ### 2. Invalid Request (`HTTP 400 Bad Request`)
-
-[cite: 1]
 
 **Python Execution (Cross-Platform):**
 
