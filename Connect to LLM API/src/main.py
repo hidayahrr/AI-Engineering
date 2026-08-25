@@ -4,15 +4,14 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-# Import schemas and LLM client
 from src.llm.schema import TriageRequest, TriageResponse, CategoryEnum, UrgencyEnum
-from src.llm.client import call_llm
+from src.llm.client import call_llm_with_repair
 
 load_dotenv()
 
 app = FastAPI(
     title="Support Ticket Classifier API",
-    description="LLM Integration Endpoint with Versioned Prompt and OpenRouter Call",
+    description="LLM Integration Endpoint with Schema Validation, Repair Retry, and Quarantine Logging",
     version="1.0.0",
 )
 
@@ -33,12 +32,12 @@ async def validation_exception_handler(request, exc: RequestValidationError):
     )
 
 
-@app.post("/triage", status_code=status.HTTP_200_OK)
+@app.post("/triage", response_model=TriageResponse, status_code=status.HTTP_200_OK)
 async def triage_ticket(payload: TriageRequest):
     """
     POST Endpoint to classify support tickets.
-    Checks LLM_STUB environment variable.
-    When LLM_STUB=0, calls the real OpenRouter API using prompts/triage-v1.md.
+    When LLM_STUB=0, calls model, parses JSON, validates schema, handles 1 repair retry,
+    and logs failures to logs/quarantine.jsonl (returning 422).
     """
     is_stub = os.getenv("LLM_STUB", "0") == "1"
 
@@ -51,14 +50,18 @@ async def triage_ticket(payload: TriageRequest):
         )
 
     try:
-        # Call the real OpenRouter model via client.py
-        raw_llm_response = call_llm(user_input=payload.text)
+        # Call LLM with validation & repair loop
+        validated_response = call_llm_with_repair(user_input=payload.text)
+        return validated_response
 
-        # For Stage 2, return raw text response from the model
-        return {"raw_response": raw_llm_response}
-
+    except ValueError as ve:
+        # HTTP 422 Unprocessable Entity for schema validation failures
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(ve),
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error communicating with LLM provider: {str(e)}",
+            detail=f"Unhandled internal server error: {str(e)}",
         )
