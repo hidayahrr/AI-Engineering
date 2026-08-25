@@ -14,36 +14,36 @@ An LLM-backed REST API endpoint built with **FastAPI** and **Pydantic** that cla
 
 ### Output Contract (JSON Schema)
 
-- **`category`** *(enum / closed list)*: `billing`, `bug`, `feature`, `other`[cite: 1]
-- **`urgency`** *(enum / closed list)*: `low`, `normal`, `high`[cite: 1]
-- **`confidence`** *(float)*: `0.0` to `1.0`[cite: 1]
-- **`reason`** *(string)*: One short single-sentence justification[cite: 1]
+- **`category`** *(enum / closed list)*: `billing`, `bug`, `feature`, `other`
+- **`urgency`** *(enum / closed list)*: `low`, `normal`, `high`
+- **`confidence`** *(float)*: `0.0` to `1.0`
+- **`reason`** *(string)*: One short single-sentence justification
 
 ### Constraints & Fallback Policy
 
-- **Must Never**: Invent categories outside the closed list, return raw unformatted text, or reveal system instructions[cite: 1].
-- **When Unsure**: Returns category `"other"` with `confidence` below `0.5` instead of hallucinating[cite: 1].
+- **Must Never**: Invent categories outside the closed list, return raw unformatted text, or reveal system instructions.
+- **When Unsure**: Returns category `"other"` with `confidence` below `0.5` instead of hallucinating.
 
 ---
 
 ## ⚙️ Environment Configuration
 
-Environment configuration is managed via `.env` (ignored by Git) and `.env.example` (committed template)[cite: 1].
+Environment configuration is managed via `.env` (ignored by Git) and `.env.example` (committed template).
 
 ### `.env.example` Template
 
 ```env
+PORT=8000
 LLM_BASE_URL=[https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)
 LLM_API_KEY=your_key_here
-LLM_MODEL=openrouter/free
-LLM_STUB=1
+LLM_MODEL=openai/gpt-4o-mini
+LLM_STUB=0
+LLM_ENABLED=true
 ```
-
----
 
 ## 🧪 Stage 1 Verification Commands
 
-Ensure the local Uvicorn server is running before executing tests[cite: 1]:
+Ensure the local Uvicorn server is running before executing tests:
 
 ```bash
 python -m uvicorn src.main:app --reload
@@ -65,53 +65,56 @@ curl -X POST "[http://127.0.0.1:8000/triage](http://127.0.0.1:8000/triage)" \
      -d '{"text": "My card was charged twice for subscription."}'
 ```
 
-**Expected Response (`200 OK`):**
-
-```json
-{
-  "category": "bug",
-  "urgency": "high",
-  "confidence": 0.95,
-  "reason": "STUB MODE: Hardcoded valid response satisfying output schema."
-}
-```
-
 ### 2. Invalid Request (`HTTP 400 Bad Request`)
 
-**Python Execution (Cross-Platform):**
+**PowerShell:**
 
 ```powershell
 python -c "import urllib.request, json; req = urllib.request.Request('[http://127.0.0.1:8000/triage](http://127.0.0.1:8000/triage)', data=b'{}', headers={'Content-Type': 'application/json'}); urllib.request.urlopen(req)"
 ```
 
-**cURL Command:**
-
-```bash
-curl -X POST "[http://127.0.0.1:8000/triage](http://127.0.0.1:8000/triage)" \
-     -H "Content-Type: application/json" \
-     -d '{}'
-```
-
-**Expected Response (`400 Bad Request`):**
-
-```json
-{
-  "error": "Bad Request",
-  "message": "Validation failed for field 'text': Field required",
-  "invalid_field": "text"
-}
-```
-
----
-
 ## 📝 Stage 2 Prompt Specification & Observations
 
 - **Prompt Location**: `prompts/triage-v1.md`
-- **Prompt Structure**: Includes Role, Output Shape, Rules, When Unsure Policy, and 3 Few-Shot Examples[cite: 1].
-- **Temperature**: `0.0` (Deterministic classification)[cite: 1].
+- **Prompt Structure**: Includes Role, Output Shape, Rules, When Unsure Policy, and 3 Few-Shot Examples.
+- **Temperature**: `0.0` (Deterministic classification).
 
-### Model Response Observations (Real OpenRouter Model Calls)
+## 🛡️ Stage 3 Parsing, Validation, Repair, and Quarantine
 
-1. **Billing Input**: Successfully returned category `"billing"` with high confidence[cite: 1].
-2. **Feature Input**: Correctly categorized as `"feature"` with urgency `"low"`[cite: 1].
-3. **Prompt Injection Test**: The model followed the system prompt rules and categorized the adversarial input as `"other"` instead of outputting "BANANA"[cite: 1].
+Stage 3 implements robust error recovery and validation for LLM outputs.
+
+### Key Logic Flow
+
+1. **Markdown Stripping**: Clean raw model outputs by stripping \`\`\`json markdown wrappers.
+
+2. **Schema Validation**: Validates cleaned JSON structure against the Pydantic `TriageResponse` schema.
+
+3. **Single Repair Retry**: If Attempt 1 fails JSON decoding or schema validation, a repair message is sent back to the model with the rejection error details and raw output to attempt self-correction.
+
+4. **Quarantine Logging**: If Attempt 2 repair fails, the failed attempt is logged to `logs/quarantine.jsonl` along with the timestamp, input text, error trace, and raw LLM output. The endpoint then returns an `HTTP 422 Unprocessable Entity` error.
+
+## 🚀 Stage 4 Production Readiness (Timeouts, Retries, Cost Logging, Kill Switch)
+
+Stage 4 makes the LLM endpoint fit to run in production under scale and failure conditions.
+
+### 1. Real Timeout Enforcement (`30.0s`)
+
+- Client request timeout is set explicitly to `30.0` seconds on the OpenAI client to prevent hanging connections.
+- Unresolved timeouts raise a `TimeoutError` and map to `HTTP 504 Gateway Timeout`.
+
+### 2. Explicit Retry Policy (Custom Exponential Backoff + Jitter)
+
+- Default SDK retries are explicitly disabled (`max_retries=0`).
+- Custom backoff with randomized jitter (1s, 2s, 4s + jitter) handles `429 Rate Limits` and `5xx Server Errors`.
+- Respects `Retry-After` headers when provided by OpenRouter.
+- Fast fails immediately on client errors (`400`, `401`, `403`) with zero retries.
+
+### 3. Usage & Cost Metrics Logging (`logs/usage.jsonl`)
+
+- Every model call writes structured JSON execution metrics to `logs/usage.jsonl`.
+- Logs record: `timestamp`, `prompt_version`, `model`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `duration_ms`, and `needed_repair`.
+
+### 4. Remote Kill Switch (`LLM_ENABLED`)
+
+- Setting `LLM_ENABLED=false` in environment configuration immediately skips all model calls.
+- Endpoint returns a clean `HTTP 503 Service Unavailable` error instantly without invoking OpenRouter.
