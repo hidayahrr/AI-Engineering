@@ -104,8 +104,14 @@ curl -X POST "[http://127.0.0.1:8000/triage](http://127.0.0.1:8000/triage)" \
 
 ---
 
-<ElicitationsGroup message="What would you like to do next?">
-<Elicitation label="Create system prompt template v1 inside prompts directory" query="Create system prompt template v1 inside prompts directory" query_intent="CLICKABLE_SUGGESTION" />
-<Elicitation label="Proceed to Stage 2 to wire versioned prompt file to OpenRouter endpoint" query="Proceed to Stage 2 to wire versioned prompt file to OpenRouter endpoint" query_intent="CLICKABLE_SUGGESTION" />
-<Elicitation label="Generate Pytest test suite to verify input validation constraints" query="Generate Pytest test suite to verify input validation constraints" query_intent="CLICKABLE_SUGGESTION" />
-</ElicitationsGroup>
+## 📝 Stage 2 Prompt Specification & Observations
+
+- **Prompt Location**: `prompts/triage-v1.md`
+- **Prompt Structure**: Includes Role, Output Shape, Rules, When Unsure Policy, and 3 Few-Shot Examples[cite: 1].
+- **Temperature**: `0.0` (Deterministic classification)[cite: 1].
+
+### Model Response Observations (Real OpenRouter Model Calls)
+
+1. **Billing Input**: Successfully returned category `"billing"` with high confidence[cite: 1].
+2. **Feature Input**: Correctly categorized as `"feature"` with urgency `"low"`[cite: 1].
+3. **Prompt Injection Test**: The model followed the system prompt rules and categorized the adversarial input as `"other"` instead of outputting "BANANA"[cite: 1].
