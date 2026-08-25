@@ -91,10 +91,12 @@ def call_llm_with_repair(user_input: str) -> TriageResponse:
     system_prompt = load_system_prompt()
     sanitized_user_content = json.dumps({"customer_message": user_input})
 
+
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": sanitized_user_content},
     ]
+
 
     # --- Attempt 1: First Model Call ---
     raw_output_1 = send_openrouter_request(messages)
