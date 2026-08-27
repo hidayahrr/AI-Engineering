@@ -118,3 +118,29 @@ Stage 4 makes the LLM endpoint fit to run in production under scale and failure 
 
 - Setting `LLM_ENABLED=false` in environment configuration immediately skips all model calls.
 - Endpoint returns a clean `HTTP 503 Service Unavailable` error instantly without invoking OpenRouter.
+
+## ✅ Stage 5 Evaluation Suite & Baseline Results
+
+Stage 5 validates model precision against hand-labeled baseline test datasets (`evals/cases.json`).
+
+### Running the Evaluation Runner
+
+Ensure Uvicorn is running, then execute:
+
+```powershell
+python evals/run_eval.py
+```
+
+### Baseline Metrics Output
+
+- **Date Evaluated**: August 28, 2026
+- **Prompt Version**: `v1` (`prompts/triage-v1.md`)
+- **Dataset Size**: 8 Hand-Labeled Input Cases (`evals/cases.json`)
+- **Category Accuracy (Key Field)**: `8/8` (100.0%)
+- **Urgency Accuracy**: `5/8` (62.5%)
+- **Exact Match Accuracy**: `5/8` (62.5%)
+
+### Evaluation Failure Analysis
+
+- **Category Match**: 100% of incoming tickets were mapped to the correct closed-list category (`billing`, `bug`, `feature`, `other`).
+- **Urgency Mismatches (3 Cases)**: Cases 3, 5, and 6 failed exact urgency matching due to subjective boundary differences between `low` and `normal` urgency ratings on edge-case feature requests and minor UI issues.
