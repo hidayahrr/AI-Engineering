@@ -1,74 +1,71 @@
-import { OpenAI } from "openai";
 import { inngest } from "./client";
+import { GoogleGenAI } from "@google/genai";
 
-type EvaluateDecisionEvent = {
-  prompt?: string;
-  nodeId?: string;
+// Initialize Gemini Client with your API key
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+// Data structure definitions matching React Flow's graph
+type NodeData = { label: string; prompt: string };
+type FlowNode = { id: string; data: NodeData };
+type FlowEdge = { id: string; source: string; target: string; sourceHandle: string };
+
+type WorkflowPayload = {
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+  startNodeId: string;
 };
 
-type DecisionResponse = {
-  decision?: "YES" | "NO";
-};
+export const runAIDecisionFlow = inngest.createFunction(
+  { id: "run-ai-decision-flow" },
+  { event: "flow/execute.requested" },
+  async ({ event, step }) => {
+    const { nodes, edges, startNodeId } = event.data as WorkflowPayload;
 
-const geminiClient = new OpenAI({
-  apiKey: process.env.GEMINI_API_KEY ?? "",
-  baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-});
+    let currentNodeId: string | null = startNodeId;
+    const executionHistory: Array<{ nodeId: string; prompt: string; decision: "YES" | "NO" }> = [];
 
-export const evaluateDecisionNode = inngest.createFunction(
-  { 
-    id: "evaluate-decision-node",
-    event: "workflow/node.evaluate", // Combined trigger into the 1st argument
-  },
-  async ({ event, step }) => { // Handler is now the 2nd argument
-    const data = event.data as EvaluateDecisionEvent;
+    // Loop through the graph node-by-node
+    while (currentNodeId) {
+      const activeNodeId: string = currentNodeId;
+      const currentNode = nodes.find((n) => n.id === activeNodeId);
 
-    const result = await step.run("evaluate-prompt", async () => {
-      const response = await geminiClient.chat.completions.create({
-        model: "gemini-3.5-flash",
-        messages: [
-          {
-            role: "system",
-            content:
-              'Evaluate the user prompt and respond strictly in JSON: {"decision": "YES"} or {"decision": "NO"}.',
-          },
-          {
-            role: "user",
-            content: data.prompt ?? "Is 5 greater than 3?",
-          },
-        ],
-        response_format: { type: "json_object" },
+      if (!currentNode) break;
+
+      // STEP 1: Ask Gemini AI to evaluate the prompt inside the node
+      const aiDecision = await step.run(`eval-node-${activeNodeId}`, async () => {
+        const response = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: `You are an AI decision engine. Analyze the following condition/question and decide whether the answer is YES or NO.
+                    
+Condition: "${currentNode.data.prompt}"
+
+STRICT RULE: Reply ONLY with the word "YES" or "NO". Do not include punctuation, explanation, or extra characters.`,
+        });
+
+        const rawText = response.text?.trim().toUpperCase() || "NO";
+        return rawText.includes("YES") ? "YES" : "NO";
       });
 
-      const content = response.choices[0]?.message?.content;
+      // Track execution step in history array
+      executionHistory.push({
+        nodeId: activeNodeId,
+        prompt: currentNode.data.prompt,
+        decision: aiDecision,
+      });
 
-      if (!content) {
-        throw new Error("Gemini returned an empty response.");
-      }
+      // STEP 2: Find outgoing edge matching the decision ('yes' handle or 'no' handle)
+      const targetHandle = aiDecision.toLowerCase(); // 'yes' or 'no'
+      const matchingEdge = edges.find(
+        (edge) => edge.source === activeNodeId && edge.sourceHandle === targetHandle
+      );
 
-      let parsed: DecisionResponse;
-
-      try {
-        parsed = JSON.parse(content) as DecisionResponse;
-      } catch {
-        throw new Error(`Invalid JSON returned by Gemini: ${content}`);
-      }
-
-      const decision: "YES" | "NO" =
-        parsed.decision === "YES" || parsed.decision === "NO"
-          ? parsed.decision
-          : "NO";
-
-      return {
-        nodeId: data.nodeId ?? "test-node",
-        decision,
-        reason: "Evaluated using Gemini API.",
-      };
-    });
+      // STEP 3: Move to next node or finish if end of flow reached
+      currentNodeId = matchingEdge ? matchingEdge.target : null;
+    }
 
     return {
-      status: "completed",
-      result,
+      status: "COMPLETED",
+      history: executionHistory,
     };
   }
 );
