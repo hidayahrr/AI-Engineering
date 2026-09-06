@@ -1,4 +1,3 @@
-````
 # Visual AI Workflow System (Pure Docker Setup)
 
 An interactive, node-based visual AI decision engine built with **Next.js (App Router)**, **React Flow**, **Inngest**, and **Google Gemini AI**—configured to run entirely inside a containerized Docker environment.
@@ -58,4 +57,3 @@ AI-Decision-Flow-JS-Stack/
 ├── Dockerfile
 └── package.json
 ```
-````
