@@ -1,5 +1,3 @@
-Markdown
-
 ````
 # Visual AI Workflow System (Pure Docker Setup)
 
