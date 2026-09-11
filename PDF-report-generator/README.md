@@ -423,3 +423,9 @@ PDF generation work should be moved out of the synchronous request-response cycl
 ### Stage 5 Idempotency Reflection
 
 Our daily generation check protects against accidental double-clicks or repeated automated retries generating redundant PDF files and wasting CPU resources. In a real-world e-commerce system, a missing idempotency check on payment or invoice generation endpoints could result in charging a customer twice or sending duplicate transaction receipts.
+
+---
+
+## Report Preview
+
+![Generated PDF Report Preview](downloaded-report.png)
