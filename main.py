@@ -3,15 +3,13 @@ import inngest
 import inngest.fast_api
 from fastapi import FastAPI
 
-# Force local development mode
+# Enable local dev mode
 os.environ["INNGEST_DEV"] = "1"
 
 app = FastAPI(title="Background Job API")
 
-# Initialize Inngest Client
 inngest_client = inngest.Inngest(app_id="report-api")
 
-# Define Inngest Function
 @inngest_client.create_function(
     fn_id="say-hello",
     trigger=inngest.TriggerEvent(event="test/hello"),
@@ -20,7 +18,6 @@ async def say_hello_function(ctx: inngest.Context, step: inngest.Step) -> str:
     await step.sleep("wait-5-seconds", "5s")
     return "Hello from the background!"
 
-# Serve Inngest integration cleanly
 inngest.fast_api.serve(
     app,
     inngest_client,
