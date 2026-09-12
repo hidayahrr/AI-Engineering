@@ -13,7 +13,7 @@ app = FastAPI(title="Background Job API")
 # Initialize Inngest Client
 inngest_client = inngest.Inngest(app_id="report-api")
 
-# In-memory database dictionary for report status tracking
+# In-memory database dictionary
 reports_db = {}
 
 
@@ -40,22 +40,19 @@ async def say_hello_function(ctx: inngest.Context, step: inngest.Step) -> str:
     return "Hello from the background!"
 
 
-# Stage 2 & 3 Function: Report generator with explicit retry limit (retries=2)
+# Stage 2 & 3 Function: Report generator
 @inngest_client.create_function(
     fn_id="make-report",
     trigger=inngest.TriggerEvent(event="report/requested"),
-    retries=2,  # Exactly 2 retries (3 attempts total)
+    retries=2,
 )
 async def make_report_function(ctx: inngest.Context, step: inngest.Step) -> dict:
     report_id = ctx.event.data.get("id")
     topic = ctx.event.data.get("topic", "")
 
-    # Step 1: Simulate slow background processing (8 seconds)
     await step.sleep("do-the-slow-work", "8s")
 
-    # Step 2: Build report and update state in database
     async def build_report():
-        # Stage 3 Failure Simulation: Throw error if topic is "fail"
         if topic.lower() == "fail":
             if report_id in reports_db:
                 reports_db[report_id]["status"] = "failed"
@@ -71,24 +68,40 @@ async def make_report_function(ctx: inngest.Context, step: inngest.Step) -> dict
     return await step.run("build-report", build_report)
 
 
-# Serve Inngest functions
+# Stage 4 Function: Cron Heartbeat (Runs every minute)
+@inngest_client.create_function(
+    fn_id="heartbeat",
+    trigger=inngest.TriggerCron(cron="* * * * *"),  # Every minute schedule
+)
+async def heartbeat_function(ctx: inngest.Context, step: inngest.Step) -> dict:
+    async def log_summary():
+        # Count report statuses across in-memory database
+        pending_count = sum(1 for r in reports_db.values() if r["status"] == "pending")
+        done_count = sum(1 for r in reports_db.values() if r["status"] == "done")
+        failed_count = sum(1 for r in reports_db.values() if r["status"] == "failed")
+
+        summary = f"HEARTBEAT SUMMARY: Pending={pending_count}, Done={done_count}, Failed={failed_count}"
+        print(summary)
+        return {"summary": summary}
+
+    return await step.run("log-system-status", log_summary)
+
+
+# Serve all 3 functions to Inngest
 inngest.fast_api.serve(
     app,
     inngest_client,
-    [say_hello_function, make_report_function],
+    [say_hello_function, make_report_function, heartbeat_function],
 )
 
 
 # --- FastAPI Endpoints ---
-
-# POST /reports - Initiates background report job
 @app.post(
     "/reports",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=ReportResponse,
 )
 async def create_report(request: ReportRequest):
-    # Stage 3 Input Validation: Reject empty or whitespace-only topics
     clean_topic = request.topic.strip()
     if not clean_topic:
         raise HTTPException(
@@ -98,7 +111,6 @@ async def create_report(request: ReportRequest):
 
     report_id = f"rep-{uuid.uuid4().hex[:8]}"
 
-    # Save initial pending state
     reports_db[report_id] = {
         "id": report_id,
         "topic": clean_topic,
@@ -106,7 +118,6 @@ async def create_report(request: ReportRequest):
         "result": None,
     }
 
-    # Dispatch event to Inngest
     await inngest_client.send(
         inngest.Event(
             name="report/requested",
@@ -117,7 +128,6 @@ async def create_report(request: ReportRequest):
         )
     )
 
-    # Return immediate 202 Accepted response
     return ReportResponse(
         id=report_id,
         status="pending",
@@ -125,7 +135,6 @@ async def create_report(request: ReportRequest):
     )
 
 
-# GET /reports/{report_id} - Status endpoint
 @app.get("/reports/{report_id}")
 async def get_report_status(report_id: str):
     if report_id not in reports_db:
